@@ -765,8 +765,11 @@ def test_transaction_hash_rejects_file_replaced_by_symlink_after_precheck(
         swap_after_link_check,
     )
 
-    expected_error = f"File changed to a symbolic link before hashing: {destination}"
-    with pytest.raises(RuntimeError, match=re.escape(expected_error)):
+    expected_error = (
+        r"File changed to (?:a symbolic link|a link, junction, or non-file) before hashing: "
+        + re.escape(str(destination))
+    )
+    with pytest.raises(RuntimeError, match=expected_error):
         simple_skill_installer._current_install_file_sha256(
             destination,
             relpath="installed.txt",

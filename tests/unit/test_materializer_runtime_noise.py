@@ -23,7 +23,7 @@ def test_copy_dir_replace_ignores_runtime_noise(tmp_path: Path) -> None:
     (src / "pkg" / "__pycache__" / "module.cpython-310.pyc").write_bytes(b"pyc")
     (src / ".coverage").write_text("noise\n", encoding="utf-8")
 
-    copy_dir_replace(src, dst)
+    copy_dir_replace(src, dst, target_root=tmp_path)
 
     assert (dst / "pkg" / "module.py").exists()
     assert not (dst / "pkg" / "__pycache__").exists()
@@ -41,7 +41,7 @@ def test_copy_skill_roots_without_self_shadow_ignores_runtime_noise(tmp_path: Pa
     (skill_root / "__pycache__").mkdir()
     (skill_root / "__pycache__" / "helper.cpython-310.pyc").write_bytes(b"pyc")
 
-    copy_skill_roots_without_self_shadow(src, dst, repo_root)
+    copy_skill_roots_without_self_shadow(src, dst, repo_root, target_root=tmp_path)
 
     assert (dst / "example-skill" / "SKILL.md").exists()
     assert (dst / "example-skill" / "nested" / "helper.py").exists()

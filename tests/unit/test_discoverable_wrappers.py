@@ -87,3 +87,50 @@ def test_build_wrapper_descriptors_fails_closed_when_canonical_contract_is_unres
             host_id="codex",
             surface=surface,
         )
+
+
+@pytest.mark.parametrize("destination_kind", ["relative", "absolute"])
+def test_wrapper_writer_rejects_targets_outside_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, destination_kind: str
+) -> None:
+    surface = load_discoverable_entry_surface(ROOT)
+    target_root = tmp_path / "host"
+    outside = tmp_path / "escaped.md"
+    outside.write_text("user data\n", encoding="utf-8")
+    destination = Path("../escaped.md") if destination_kind == "relative" else outside
+    assert (target_root / destination).resolve().is_relative_to(tmp_path.resolve())
+    monkeypatch.setattr(discoverable_wrappers, "_host_surface_targets", lambda host, descriptor: (destination,))
+
+    with pytest.raises(RuntimeError, match="outside"):
+        discoverable_wrappers.materialize_host_visible_wrappers(
+            target_root=target_root, host_id="codex", surface=surface
+        )
+
+    assert outside.read_text(encoding="utf-8") == "user data\n"
+    assert not target_root.exists()
+
+
+@pytest.mark.parametrize("host_id", ["codex", "claude-code"])
+@pytest.mark.parametrize("kind", ["symlink", "junction"])
+def test_wrapper_writer_refuses_linked_surface_parent(
+    tmp_path: Path, host_id: str, kind: str
+) -> None:
+    from tests.unit.test_materializer_path_safety import _directory_link
+
+    surface = load_discoverable_entry_surface(ROOT)
+    target_root = tmp_path / "host"
+    external = tmp_path / "external"
+    external.mkdir()
+    marker = external / "user.txt"
+    marker.write_text("user data\n", encoding="utf-8")
+    surface_directory = "commands" if host_id == "codex" else "skills"
+    _directory_link(target_root / surface_directory, external, kind)
+
+    with pytest.raises(RuntimeError, match="link|reparse|outside"):
+        discoverable_wrappers.materialize_host_visible_wrappers(
+            target_root=target_root, host_id=host_id, surface=surface
+        )
+
+    assert marker.read_text(encoding="utf-8") == "user data\n"
+    assert not (external / "vibe.md").exists()
+    assert not (external / "vibe/SKILL.md").exists()

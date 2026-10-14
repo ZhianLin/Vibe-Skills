@@ -9,6 +9,7 @@ import tempfile
 from typing import Any
 
 from ._bootstrap import ensure_contracts_src_on_path
+from ._path_safety import assert_local_destination
 
 ensure_contracts_src_on_path()
 
@@ -85,9 +86,11 @@ def copy_dir_replace(
     src: Path,
     dst: Path,
     *,
+    target_root: Path,
     track_created_path: TrackCreatedPath = _noop_path,
     record_owned_tree_root: RecordOwnedTreeRoot = _noop_path,
 ) -> None:
+    assert_local_destination(dst, target_root=target_root)
     if not src.exists():
         return
     if same_path(src, dst):
@@ -99,7 +102,9 @@ def copy_dir_replace(
 
     if not requires_staging:
         if dst.exists():
+            assert_local_destination(dst, target_root=target_root)
             shutil.rmtree(dst)
+        assert_local_destination(dst, target_root=target_root)
         _copytree_runtime_filtered(src, dst)
         track_created_path(dst)
         record_owned_tree_root(dst)
@@ -108,20 +113,32 @@ def copy_dir_replace(
     stage_root = Path(tempfile.mkdtemp(prefix="vgo-copy-tree-"))
     try:
         staged = stage_root / src.name
+        assert_local_destination(staged, target_root=stage_root)
         _copytree_runtime_filtered(src, staged)
         if dst.exists():
+            assert_local_destination(dst, target_root=target_root)
             shutil.rmtree(dst)
+        assert_local_destination(dst, target_root=target_root)
         _copytree_runtime_filtered(staged, dst)
         track_created_path(dst)
         record_owned_tree_root(dst)
     finally:
+        assert_local_destination(stage_root, target_root=stage_root)
         shutil.rmtree(stage_root, ignore_errors=True)
 
 
-def copy_file(src: Path, dst: Path, *, track_created_path: TrackCreatedPath = _noop_path) -> None:
+def copy_file(
+    src: Path,
+    dst: Path,
+    *,
+    target_root: Path,
+    track_created_path: TrackCreatedPath = _noop_path,
+) -> None:
+    assert_local_destination(dst, target_root=target_root)
     if src.exists() and dst.exists() and same_path(src, dst):
         return
     dst.parent.mkdir(parents=True, exist_ok=True)
+    assert_local_destination(dst, target_root=target_root)
     shutil.copy2(src, dst)
     track_created_path(dst)
 
@@ -130,9 +147,11 @@ def copy_tree(
     src: Path,
     dst: Path,
     *,
+    target_root: Path,
     track_created_path: TrackCreatedPath = _noop_path,
     record_owned_tree_root: RecordOwnedTreeRoot = _noop_path,
 ) -> None:
+    assert_local_destination(dst, target_root=target_root)
     if not src.exists():
         return
     children = _filtered_directory_children(src)
@@ -144,11 +163,12 @@ def copy_tree(
             copy_dir_replace(
                 child,
                 target,
+                target_root=target_root,
                 track_created_path=track_created_path,
                 record_owned_tree_root=record_owned_tree_root,
             )
         else:
-            copy_file(child, target, track_created_path=track_created_path)
+            copy_file(child, target, target_root=target_root, track_created_path=track_created_path)
 
 
 def copy_skill_roots_without_self_shadow(
@@ -157,9 +177,11 @@ def copy_skill_roots_without_self_shadow(
     repo_root: Path,
     excluded_skill_names: set[str] | None = None,
     *,
+    target_root: Path,
     track_created_path: TrackCreatedPath = _noop_path,
     record_owned_tree_root: RecordOwnedTreeRoot = _noop_path,
 ) -> None:
+    assert_local_destination(dst, target_root=target_root)
     if not src.exists():
         return
     dst.mkdir(parents=True, exist_ok=True)
@@ -174,11 +196,12 @@ def copy_skill_roots_without_self_shadow(
             copy_dir_replace(
                 child,
                 target,
+                target_root=target_root,
                 track_created_path=track_created_path,
                 record_owned_tree_root=record_owned_tree_root,
             )
         else:
-            copy_file(child, target, track_created_path=track_created_path)
+            copy_file(child, target, target_root=target_root, track_created_path=track_created_path)
 
 
 def ensure_executable(path: Path) -> None:
@@ -186,17 +209,21 @@ def ensure_executable(path: Path) -> None:
     path.chmod(current | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def restore_skill_entrypoint_if_needed(skill_root: Path) -> None:
+def restore_skill_entrypoint_if_needed(skill_root: Path, *, target_root: Path) -> None:
     skill_md = skill_root / "SKILL.md"
     mirror_md = skill_root / "SKILL.runtime-mirror.md"
+    assert_local_destination(skill_md, target_root=target_root)
+    assert_local_destination(mirror_md, target_root=target_root)
     if skill_md.exists() or not mirror_md.exists():
         return
     mirror_md.rename(skill_md)
 
 
-def sanitize_skill_entrypoint_for_runtime_mirror(skill_root: Path) -> None:
+def sanitize_skill_entrypoint_for_runtime_mirror(skill_root: Path, *, target_root: Path) -> None:
     skill_md = skill_root / "SKILL.md"
     mirror_md = skill_root / "SKILL.runtime-mirror.md"
+    assert_local_destination(skill_md, target_root=target_root)
+    assert_local_destination(mirror_md, target_root=target_root)
     if mirror_md.exists():
         if skill_md.exists():
             skill_md.unlink()
@@ -229,9 +256,11 @@ def sync_vibe_canonical(
     packaging = resolve_packaging_contract(governance, repo_root)
     canonical_root = (repo_root / resolve_canonical_mirror_relpath(governance)).resolve()
     target_vibe_root = target_root / target_rel
+    assert_local_destination(target_vibe_root, target_root=target_root)
     if same_path(canonical_root, target_vibe_root):
         return
     if target_vibe_root.exists():
+        assert_local_destination(target_vibe_root, target_root=target_root)
         shutil.rmtree(target_vibe_root)
     for rel in packaging["mirror"]["files"]:
         src = canonical_root / rel
@@ -253,6 +282,7 @@ def materialize_generated_nested_compatibility(
     managed_skill_names: set[str] | None = None,
     source_skills_root: Path | None = None,
     *,
+    target_root: Path,
     copy_file_fn: Callable[[Path, Path], None],
     copy_dir_replace_fn: Callable[[Path, Path], None],
 ) -> None:
@@ -260,7 +290,9 @@ def materialize_generated_nested_compatibility(
     if suffix is None:
         return
 
+    assert_local_destination(installed_root, target_root=target_root)
     nested_root = installed_root / suffix
+    assert_local_destination(nested_root, target_root=target_root)
     if same_path(installed_root, nested_root):
         return
 
@@ -271,8 +303,10 @@ def materialize_generated_nested_compatibility(
 
     if source_is_nested_skills_root:
         if nested_root.exists():
+            assert_local_destination(nested_root, target_root=target_root)
             shutil.rmtree(nested_root)
     elif nested_skills_root.exists():
+        assert_local_destination(nested_skills_root, target_root=target_root)
         shutil.rmtree(nested_skills_root)
 
     if not effective_source_skills_root.exists():
@@ -286,7 +320,7 @@ def materialize_generated_nested_compatibility(
         destination = nested_skills_root / skill_dir.name
         if not same_path(skill_dir, destination):
             copy_dir_replace_fn(skill_dir, destination)
-            sanitize_skill_entrypoint_for_runtime_mirror(destination)
+            sanitize_skill_entrypoint_for_runtime_mirror(destination, target_root=target_root)
 
     packaging = resolve_packaging_contract(governance, installed_root)
     for rel in packaging["mirror"]["files"]:
@@ -297,7 +331,7 @@ def materialize_generated_nested_compatibility(
         src = installed_root / rel
         if src.exists():
             copy_dir_replace_fn(src, nested_root / rel)
-    sanitize_skill_entrypoint_for_runtime_mirror(nested_root)
+    sanitize_skill_entrypoint_for_runtime_mirror(nested_root, target_root=target_root)
 
 
 def canonical_vibe_target_relpath(packaging: dict[str, Any]) -> str:
@@ -424,9 +458,9 @@ def materialize_allowlisted_skills(
         destination = target_skills_root / name
         copy_dir_replace_fn(source, destination)
         if hidden_entrypoints:
-            sanitize_skill_entrypoint_for_runtime_mirror(destination)
+            sanitize_skill_entrypoint_for_runtime_mirror(destination, target_root=target_root)
         else:
-            restore_skill_entrypoint_if_needed(destination)
+            restore_skill_entrypoint_if_needed(destination, target_root=target_root)
 
 
 def materialize_internal_skill_corpus(
@@ -439,7 +473,9 @@ def materialize_internal_skill_corpus(
     corpus = internal_skill_corpus(packaging)
     if not bool(corpus.get("enabled")):
         stale_corpus = target_root / canonical_vibe_target_relpath(packaging) / "bundled" / "skills"
+        assert_local_destination(stale_corpus, target_root=target_root)
         if stale_corpus.exists():
+            assert_local_destination(stale_corpus, target_root=target_root)
             shutil.rmtree(stale_corpus)
         return None
 
@@ -447,6 +483,7 @@ def materialize_internal_skill_corpus(
     if not target_relpath:
         raise SystemExit("Internal skill corpus target path must be explicit when internal corpus packaging is enabled.")
     destination_root = target_root / target_relpath
+    assert_local_destination(destination_root, target_root=target_root)
     bundled_root = resolve_bundled_skills_root(repo_root, packaging)
     if bundled_root is None:
         raise SystemExit("Internal skill corpus source must be explicit when internal corpus packaging is enabled.")
@@ -455,6 +492,7 @@ def materialize_internal_skill_corpus(
     in_place_corpus = bundled_root.exists() and same_path(bundled_root, destination_root)
 
     if destination_root.exists() and not in_place_corpus:
+        assert_local_destination(destination_root, target_root=target_root)
         shutil.rmtree(destination_root)
 
     destination_root.mkdir(parents=True, exist_ok=True)
@@ -486,6 +524,7 @@ def materialize_internal_skill_corpus(
     if in_place_corpus:
         for existing in sorted(destination_root.iterdir(), key=lambda item: item.name):
             if existing.is_dir() and existing.name not in selected_names:
+                assert_local_destination(existing, target_root=target_root)
                 shutil.rmtree(existing)
 
     for name in sorted(selected_names):
@@ -496,9 +535,9 @@ def materialize_internal_skill_corpus(
         if not same_path(source, destination):
             copy_dir_replace_fn(source, destination)
         if bool(corpus.get("sanitize_entrypoints", True)):
-            sanitize_skill_entrypoint_for_runtime_mirror(destination)
+            sanitize_skill_entrypoint_for_runtime_mirror(destination, target_root=target_root)
         else:
-            restore_skill_entrypoint_if_needed(destination)
+            restore_skill_entrypoint_if_needed(destination, target_root=target_root)
 
     return destination_root
 
@@ -525,9 +564,9 @@ def ensure_skill_present(
             if src_path.exists():
                 copy_tree_fn(src_path, destination)
                 if hidden_entrypoints:
-                    sanitize_skill_entrypoint_for_runtime_mirror(destination)
+                    sanitize_skill_entrypoint_for_runtime_mirror(destination, target_root=target_root)
                 else:
-                    restore_skill_entrypoint_if_needed(destination)
+                    restore_skill_entrypoint_if_needed(destination, target_root=target_root)
                 external_used.add(name)
                 break
     if required and resolve_skill_entrypoint(destination) is None:

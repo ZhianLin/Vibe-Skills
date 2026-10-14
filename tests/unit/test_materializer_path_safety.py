@@ -175,3 +175,36 @@ def test_disabled_corpus_cleanup_refuses_linked_parent(tmp_path: Path, kind: str
         )
 
     assert marker.read_text(encoding="utf-8") == "user data\n"
+
+
+@pytest.mark.parametrize("kind", ["symlink", "junction"])
+@pytest.mark.parametrize("refresh_ledger", [False, True])
+def test_legacy_cli_refuses_linked_target_root_before_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, refresh_ledger: bool
+) -> None:
+    import vgo_installer.install_runtime as install_runtime
+
+    external = tmp_path / "external"
+    external.mkdir()
+    marker = external / "user.txt"
+    marker.write_text("user data\n", encoding="utf-8")
+    target_root = tmp_path / "host"
+    _directory_link(target_root, external, kind)
+
+    def unexpected_install_work(*args, **kwargs):
+        pytest.fail("linked target root must be refused before install work")
+
+    monkeypatch.setattr(install_runtime, "resolve_adapter", unexpected_install_work)
+    monkeypatch.setattr(install_runtime, "refresh_install_ledger", unexpected_install_work)
+    arguments = [
+        "--repo-root", str(ROOT), "--target-root", str(target_root),
+        "--host", "codex", "--profile", "minimal",
+    ]
+    if refresh_ledger:
+        arguments.append("--refresh-install-ledger")
+
+    with pytest.raises(RuntimeError, match="link|reparse"):
+        install_runtime.main(arguments)
+
+    assert marker.read_text(encoding="utf-8") == "user data\n"
+    assert list(external.iterdir()) == [marker]

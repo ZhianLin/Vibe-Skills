@@ -880,7 +880,9 @@ def main(argv: list[str] | None = None):
     if args.refresh_install_ledger:
         if not args.target_root:
             parser.error("--target-root is required with --refresh-install-ledger")
-        write_json(refresh_install_ledger(Path(args.target_root).resolve()))
+        original_target_root = Path(args.target_root).absolute()
+        assert_local_destination(original_target_root, target_root=original_target_root)
+        write_json(refresh_install_ledger(original_target_root.resolve()))
         return
 
     missing_required = [
@@ -897,7 +899,9 @@ def main(argv: list[str] | None = None):
     reset_ledger_state()
 
     repo_root = Path(args.repo_root).resolve()
-    target_root = Path(args.target_root).resolve()
+    original_target_root = Path(args.target_root).absolute()
+    assert_local_destination(original_target_root, target_root=original_target_root)
+    target_root = original_target_root.resolve()
     target_root.mkdir(parents=True, exist_ok=True)
     track_created_path(target_root)
     adapter = resolve_adapter(repo_root, args.host)

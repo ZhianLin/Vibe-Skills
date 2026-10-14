@@ -615,6 +615,65 @@ def test_check_reports_drift_when_receipt_owned_file_changes(tmp_path: Path) -> 
     assert result["drifted_files"] == ["SKILL.md"]
 
 
+@pytest.mark.parametrize("operation", ["install", "check", "update", "uninstall"])
+def test_lifecycle_accepts_utf8_bom_install_receipt(tmp_path: Path, operation: str) -> None:
+    repo_root = tmp_path / "repo"
+    skills_dir = tmp_path / "skills"
+    _write(repo_root / "SKILL.md", "# vibe\n")
+    _seed_runtime_contract(repo_root)
+    install_vibe_skill(
+        repo_root=repo_root,
+        skills_dir=skills_dir,
+        installed_at_utc="2026-07-02T08:00:00Z",
+    )
+    receipt_path = skills_dir / "vibe" / simple_skill_installer.RECEIPT_RELPATH
+    receipt_path.write_bytes(b"\xef\xbb\xbf" + receipt_path.read_bytes())
+
+    if operation == "check":
+        assert check_vibe_skill(skills_dir=skills_dir)["ok"] is True
+    elif operation == "uninstall":
+        assert uninstall_vibe_skill(skills_dir=skills_dir)["ok"] is True
+        assert not (skills_dir / "vibe").exists()
+    else:
+        action = install_vibe_skill if operation == "install" else update_vibe_skill
+        action(
+            repo_root=repo_root,
+            skills_dir=skills_dir,
+            installed_at_utc="2026-07-02T09:00:00Z",
+        )
+        assert check_vibe_skill(skills_dir=skills_dir)["ok"] is True
+
+
+@pytest.mark.parametrize("interrupted_stage", ["staging", "replacement"])
+def test_install_recovers_utf8_bom_transaction_state(
+    tmp_path: Path, interrupted_stage: str
+) -> None:
+    repo_root = tmp_path / "repo"
+    skills_dir = tmp_path / "skills"
+    _write(repo_root / "SKILL.md", "# vibe\n")
+    _seed_runtime_contract(repo_root)
+    if interrupted_stage == "staging":
+        _run_install_until_staging_exit(repo_root=repo_root, skills_dir=skills_dir)
+    else:
+        _run_install_until_process_exit(
+            repo_root=repo_root,
+            skills_dir=skills_dir,
+            exit_after_destination=skills_dir / "vibe/SKILL.md",
+        )
+    state_path = skills_dir / simple_skill_installer.INSTALL_STATE_RELPATH
+    assert state_path.is_file()
+    state_path.write_bytes(b"\xef\xbb\xbf" + state_path.read_bytes())
+
+    install_vibe_skill(
+        repo_root=repo_root,
+        skills_dir=skills_dir,
+        installed_at_utc="2026-07-02T09:00:00Z",
+    )
+
+    assert check_vibe_skill(skills_dir=skills_dir)["ok"] is True
+    assert not state_path.exists()
+
+
 def test_check_reports_owned_leaf_symlink_as_drift(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     skills_dir = tmp_path / "skills"

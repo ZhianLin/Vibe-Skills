@@ -180,3 +180,35 @@ jobs:
         if: always() && steps.host-boundary-proof.outcome != 'success'
         shell: pwsh
         run: exit 1
+
+  installer-safety:
+    name: installer-safety (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pytest
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Verify installer destination boundaries and BOM recovery
+        run: >-
+          python -B -m pytest -q -ra
+          tests/unit/test_materializer_path_safety.py
+          tests/unit/test_materializer_runtime_noise.py
+          tests/unit/test_host_closure.py
+          tests/unit/test_simple_skill_installer.py
+          tests/unit/test_discoverable_entry_surface.py
+          tests/unit/test_discoverable_wrappers.py
+          tests/unit/test_vgo_cli_commands.py

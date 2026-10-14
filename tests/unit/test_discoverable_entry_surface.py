@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sys
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -29,3 +32,18 @@ def test_load_discoverable_entry_surface_reads_shared_wrapper_truth() -> None:
     )
     assert surface.entry_by_id['vibe'].publicly_exposed is True
     assert surface.entry_by_id['vibe'].allow_grade_flags is True
+
+
+@pytest.mark.parametrize(
+    "entry_id",
+    ["../escape", "../../escape", "/absolute", r"C:\absolute", r"..\escape", ".", "..", "", "invalid\x00name"],
+)
+def test_entry_surface_rejects_unsafe_ids(tmp_path: Path, entry_id: str) -> None:
+    payload = json.loads((ROOT / "config/vibe-entry-surfaces.json").read_text(encoding="utf-8-sig"))
+    payload["entries"][0]["id"] = entry_id
+    manifest = tmp_path / "config/vibe-entry-surfaces.json"
+    manifest.parent.mkdir()
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="entry id"):
+        load_discoverable_entry_surface(tmp_path)

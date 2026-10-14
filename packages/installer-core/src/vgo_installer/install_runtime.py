@@ -30,6 +30,7 @@ from .ledger_service import (
     refresh_install_ledger,
     write_install_ledger,
 )
+from ._path_safety import assert_local_destination
 from .materializer import (
     canonical_vibe_target_relpath,
     compatibility_projection_names,
@@ -125,7 +126,10 @@ def copy_command_tree_with_public_vibe_entries(
     src_root: Path,
     dst_root: Path,
     entry_surface,
+    *,
+    target_root: Path,
 ) -> None:
+    assert_local_destination(dst_root, target_root=target_root)
     if not src_root.exists():
         return
 
@@ -139,11 +143,12 @@ def copy_command_tree_with_public_vibe_entries(
             copy_dir_replace(
                 child,
                 target,
+                target_root=target_root,
                 track_created_path=track_created_path,
                 record_owned_tree_root=record_owned_tree_root,
             )
         else:
-            copy_file(child, target, track_created_path=track_created_path)
+            copy_file(child, target, target_root=target_root, track_created_path=track_created_path)
 
 
 def build_closed_ready_failure_message(adapter: dict[str, object], closure: dict[str, object]) -> str:
@@ -646,6 +651,7 @@ def install_runtime_core(
                 dst_root,
                 repo_root,
                 excluded_skill_names,
+                target_root=runtime_root,
                 track_created_path=track_created_path,
                 record_owned_tree_root=record_owned_tree_root,
             )
@@ -655,18 +661,20 @@ def install_runtime_core(
                     src_root,
                     dst_root,
                     entry_surface,
+                    target_root=runtime_root,
                 )
             else:
                 copy_tree(
                     src_root,
                     dst_root,
+                    target_root=runtime_root,
                     track_created_path=track_created_path,
                     record_owned_tree_root=record_owned_tree_root,
                 )
         if entry["target"] == "skills":
             for skill_dir in (runtime_root / "skills").iterdir():
                 if skill_dir.is_dir():
-                    restore_skill_entrypoint_if_needed(skill_dir)
+                    restore_skill_entrypoint_if_needed(skill_dir, target_root=runtime_root)
     for entry in packaging["copy_files"]:
         src = repo_root / entry["source"]
         if not src.exists():
@@ -674,17 +682,18 @@ def install_runtime_core(
                 continue
             raise SystemExit(f"Runtime-core packaging source missing: {src}")
         destination = runtime_root / entry["target"]
-        copy_file(src, destination, track_created_path=track_created_path)
+        copy_file(src, destination, target_root=runtime_root, track_created_path=track_created_path)
     target_rel = canonical_vibe_target_relpath(packaging)
     canonical_vibe_name = Path(target_rel).name
     sync_vibe_canonical(
         repo_root,
         runtime_root,
         target_rel,
-        copy_file_fn=lambda src, dst: copy_file(src, dst, track_created_path=track_created_path),
+        copy_file_fn=lambda src, dst: copy_file(src, dst, target_root=runtime_root, track_created_path=track_created_path),
         copy_dir_replace_fn=lambda src, dst: copy_dir_replace(
             src,
             dst,
+            target_root=runtime_root,
             track_created_path=track_created_path,
             record_owned_tree_root=record_owned_tree_root,
         ),
@@ -697,6 +706,7 @@ def install_runtime_core(
         copy_dir_replace_fn=lambda src, dst: copy_dir_replace(
             src,
             dst,
+            target_root=runtime_root,
             track_created_path=track_created_path,
             record_owned_tree_root=record_owned_tree_root,
         ),
@@ -711,6 +721,7 @@ def install_runtime_core(
         copy_dir_replace_fn=lambda src, dst: copy_dir_replace(
             src,
             dst,
+            target_root=runtime_root,
             track_created_path=track_created_path,
             record_owned_tree_root=record_owned_tree_root,
         ),
@@ -746,6 +757,7 @@ def install_runtime_core(
             copy_tree_fn=lambda src, dst: copy_tree(
                 src,
                 dst,
+                target_root=runtime_root,
                 track_created_path=track_created_path,
                 record_owned_tree_root=record_owned_tree_root,
             ),
@@ -764,6 +776,7 @@ def install_runtime_core(
             copy_tree_fn=lambda src, dst: copy_tree(
                 src,
                 dst,
+                target_root=runtime_root,
                 track_created_path=track_created_path,
                 record_owned_tree_root=record_owned_tree_root,
             ),
@@ -782,6 +795,7 @@ def install_runtime_core(
             copy_tree_fn=lambda src, dst: copy_tree(
                 src,
                 dst,
+                target_root=runtime_root,
                 track_created_path=track_created_path,
                 record_owned_tree_root=record_owned_tree_root,
             ),
@@ -796,10 +810,12 @@ def install_runtime_core(
         runtime_root / target_rel,
         set(current_managed_skill_names),
         compatibility_source_root,
-        copy_file_fn=lambda src, dst: copy_file(src, dst, track_created_path=track_created_path),
+        target_root=runtime_root,
+        copy_file_fn=lambda src, dst: copy_file(src, dst, target_root=runtime_root, track_created_path=track_created_path),
         copy_dir_replace_fn=lambda src, dst: copy_dir_replace(
             src,
             dst,
+            target_root=runtime_root,
             track_created_path=track_created_path,
             record_owned_tree_root=record_owned_tree_root,
         ),
@@ -922,11 +938,12 @@ def main(argv: list[str] | None = None):
 
     def copy_runtime_core_mode_tree(src: Path, dst: Path) -> None:
         if src == repo_root / "commands" and runtime_entry_surface is not None:
-            copy_command_tree_with_public_vibe_entries(src, dst, runtime_entry_surface)
+            copy_command_tree_with_public_vibe_entries(src, dst, runtime_entry_surface, target_root=target_root)
             return
         copy_tree(
             src,
             dst,
+            target_root=target_root,
             track_created_path=track_created_path,
             record_owned_tree_root=record_owned_tree_root,
         )
@@ -940,10 +957,11 @@ def main(argv: list[str] | None = None):
             copy_tree_fn=lambda src, dst: copy_tree(
                 src,
                 dst,
+                target_root=target_root,
                 track_created_path=track_created_path,
                 record_owned_tree_root=record_owned_tree_root,
             ),
-            copy_file_fn=lambda src, dst: copy_file(src, dst, track_created_path=track_created_path),
+            copy_file_fn=lambda src, dst: copy_file(src, dst, target_root=target_root, track_created_path=track_created_path),
             track_created_path=track_created_path,
             record_generated_from_template=record_generated_from_template,
             record_managed_json=record_managed_json,
@@ -956,10 +974,11 @@ def main(argv: list[str] | None = None):
                 copy_tree_fn=lambda src, dst: copy_tree(
                     src,
                     dst,
+                    target_root=target_root,
                     track_created_path=track_created_path,
                     record_owned_tree_root=record_owned_tree_root,
                 ),
-                copy_file_fn=lambda src, dst: copy_file(src, dst, track_created_path=track_created_path),
+                copy_file_fn=lambda src, dst: copy_file(src, dst, target_root=target_root, track_created_path=track_created_path),
             )
         elif adapter["id"] == "claude-code":
             install_claude_guidance_payload(
@@ -980,7 +999,7 @@ def main(argv: list[str] | None = None):
             target_root,
             adapter,
             copy_tree_fn=copy_runtime_core_mode_tree,
-            copy_file_fn=lambda src, dst: copy_file(src, dst, track_created_path=track_created_path),
+            copy_file_fn=lambda src, dst: copy_file(src, dst, target_root=target_root, track_created_path=track_created_path),
             track_created_path=track_created_path,
             record_generated_from_template=record_generated_from_template,
         )

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 
+from .install_ledger import InstallLedger
+
 
 DISCOVERABLE_ENTRY_SURFACE_RELPATH = Path('config') / 'vibe-entry-surfaces.json'
 
@@ -16,6 +18,14 @@ class DiscoverableEntry:
     progressive_stage_stops: tuple[str, ...]
     allow_grade_flags: bool
     publicly_exposed: bool
+
+    def __post_init__(self) -> None:
+        try:
+            if not isinstance(self.id, str) or '\x00' in self.id:
+                raise ValueError('entry id must be text without null bytes')
+            InstallLedger(managed_skill_names=[self.id])
+        except ValueError as exc:
+            raise ValueError(f'invalid discoverable entry id: {self.id!r}') from exc
 
 
 @dataclass(frozen=True, slots=True)

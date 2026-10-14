@@ -7,6 +7,8 @@ from pathlib import Path
 from vgo_contracts.canonical_vibe_contract import resolve_canonical_vibe_contract, uses_skill_only_activation
 from vgo_contracts.discoverable_entry_surface import DiscoverableEntry, DiscoverableEntrySurface
 
+from ._path_safety import assert_local_destination
+
 
 @dataclass(frozen=True, slots=True)
 class WrapperDescriptor:
@@ -216,14 +218,22 @@ def materialize_host_visible_wrappers(
     surface: DiscoverableEntrySurface,
 ) -> list[Path]:
     descriptors = build_wrapper_descriptors(host_id, surface)
+    destinations = [
+        (descriptor, destination_rel, target_root / destination_rel)
+        for descriptor in descriptors.values()
+        for destination_rel in _host_surface_targets(host_id, descriptor)
+    ]
+    for _, _, destination in destinations:
+        assert_local_destination(destination, target_root=target_root)
+
     written: list[Path] = []
-    for descriptor in descriptors.values():
-        for destination_rel in _host_surface_targets(host_id, descriptor):
-            destination = target_root / destination_rel
-            if descriptor.entry_id == "vibe" and destination_rel == Path("skills") / "vibe" / "SKILL.md" and destination.exists():
-                written.append(destination)
-                continue
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text(descriptor.content, encoding="utf-8")
+    for descriptor, destination_rel, destination in destinations:
+        assert_local_destination(destination, target_root=target_root)
+        if descriptor.entry_id == "vibe" and destination_rel == Path("skills") / "vibe" / "SKILL.md" and destination.exists():
             written.append(destination)
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        assert_local_destination(destination, target_root=target_root)
+        destination.write_text(descriptor.content, encoding="utf-8")
+        written.append(destination)
     return written

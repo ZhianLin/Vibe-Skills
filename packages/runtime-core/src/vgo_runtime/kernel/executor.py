@@ -28,6 +28,8 @@ class WorkUnitResult:
     artifact_kind: str = "scaffold"
     proof_ready: bool = False
     artifact_sha256: tuple[str, ...] = ()
+    task_input_sha256: str = ""
+    dependency_output_sha256: str = ""
 
     def model_dump(self) -> dict[str, object]:
         return asdict(self)

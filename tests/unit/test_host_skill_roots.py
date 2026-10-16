@@ -130,3 +130,46 @@ def test_resolve_host_skill_roots_rejects_invalid_config_shape(tmp_path: Path) -
             agent_root=agent_root,
             workspace_root=None,
         )
+
+
+@pytest.mark.parametrize("scope", ["workspace", "user"])
+def test_resolve_host_skill_roots_accepts_bom_config(tmp_path: Path, scope: str) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    base = workspace if scope == "workspace" else home
+    config = base / ".vibeskills" / "skill-roots.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        json.dumps({"schema_version": 1, "extra_skill_roots": ["team-skills"]}),
+        encoding="utf-8-sig",
+    )
+    roots = resolve_host_skill_roots(
+        repo_root=REPO_ROOT,
+        host_id="codex",
+        agent_root=home / ".agents" / "skills",
+        workspace_root=workspace,
+    )
+    assert roots[0].path == (base / "team-skills").resolve()
+    assert roots[0].root_key == scope + "_extra"
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        ('{"schema_version": 2, "extra_skill_roots": []}', "schema_version must be 1"),
+        ('{"schema_version": 1, "extra_skill_roots": [null]}', "non-empty strings"),
+        ('{"schema_version": 1, "extra_skill_roots": ', "Expecting value"),
+    ],
+)
+def test_bom_config_preserves_strict_validation(tmp_path: Path, content: str, message: str) -> None:
+    workspace = tmp_path / "workspace"
+    config = workspace / ".vibeskills" / "skill-roots.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(content, encoding="utf-8-sig")
+    with pytest.raises(ValueError, match=message):
+        resolve_host_skill_roots(
+            repo_root=REPO_ROOT,
+            host_id="codex",
+            agent_root=tmp_path / "home" / ".agents" / "skills",
+            workspace_root=workspace,
+        )

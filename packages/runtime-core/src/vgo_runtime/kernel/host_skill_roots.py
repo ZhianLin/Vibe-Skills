@@ -70,7 +70,7 @@ def _expand_root_path(raw_path: str, *, base_root: Path, home_root: Path) -> Pat
 def _load_extra_roots(config_path: Path) -> list[str]:
     if not config_path.is_file():
         return []
-    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload = json.loads(config_path.read_text(encoding="utf-8-sig"))
     if not isinstance(payload, dict):
         raise ValueError(f"Skill roots config must be an object: {config_path}")
     if payload.get("schema_version") != 1:

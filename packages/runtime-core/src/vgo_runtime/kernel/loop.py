@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -392,7 +393,11 @@ def _coerce_work_result(payload: dict[str, object]) -> WorkUnitResult:
             else None
         ),
         failure_reason=(str(payload["failure_reason"]) if payload.get("failure_reason") is not None else None),
+        artifact_kind=str(payload.get("artifact_kind") or "scaffold"),
+        proof_ready=payload.get("proof_ready") is True,
         artifact_sha256=tuple(str(value) for value in payload.get("artifact_sha256", [])),
+        task_input_sha256=str(payload.get("task_input_sha256") or ""),
+        dependency_output_sha256=str(payload.get("dependency_output_sha256") or ""),
     )
 
 
@@ -490,7 +495,10 @@ def _can_reuse_previous_work(*, previous_work_unit: WorkUnit | None, current_wor
         if len(content_sha256) != 64 or any(character not in "0123456789abcdef" for character in content_sha256):
             return False
     return (
-        previous_work_unit.preferred_skill == current_work_unit.preferred_skill
+        previous_work_unit.goal == current_work_unit.goal
+        and previous_work_unit.expected_artifacts == current_work_unit.expected_artifacts
+        and previous_work_unit.binding_profile == current_work_unit.binding_profile
+        and previous_work_unit.preferred_skill == current_work_unit.preferred_skill
         and previous_work_unit.selected_skill_provenance == current_work_unit.selected_skill_provenance
         and previous_work_unit.acceptance_criteria == current_work_unit.acceptance_criteria
         and previous_work_unit.depends_on == current_work_unit.depends_on
@@ -510,6 +518,70 @@ def _completed_result_artifacts_are_current(result: WorkUnitResult) -> bool:
     if len(recorded) != len(result.artifact_paths) or any(not digest for digest in recorded):
         return False
     return recorded == artifact_sha256_for_paths(result.artifact_paths)
+
+
+def _fingerprint(payload: object) -> str:
+    content = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _task_input_sha256(task_card: TaskCard) -> str:
+    # Revision history describes the conversation; effective fields define the work.
+    return _fingerprint({
+        "schema_version": 1,
+        "goal": task_card.goal,
+        "deliverables": task_card.deliverables,
+        "constraints": task_card.constraints,
+        "known_context": task_card.known_context,
+        "unknowns": task_card.unknowns,
+        "completion_criteria": task_card.completion_criteria,
+        "mode": task_card.mode,
+    })
+
+
+def _dependency_output_sha256(
+    work_unit: WorkUnit,
+    results_by_id: dict[str, WorkUnitResult],
+) -> str | None:
+    dependencies: list[dict[str, object]] = []
+    for dependency_id in work_unit.depends_on:
+        result = results_by_id.get(dependency_id)
+        if result is None or not _completed_result_artifacts_are_current(result):
+            return None
+        dependencies.append({
+            "work_unit_id": dependency_id,
+            "artifacts": result.artifacts,
+            "artifact_paths": result.artifact_paths,
+            "artifact_sha256": result.artifact_sha256,
+        })
+    return _fingerprint({"schema_version": 1, "dependencies": dependencies})
+
+
+def _reusable_completed_result(
+    *,
+    previous_work_unit: WorkUnit | None,
+    current_work_unit: WorkUnit,
+    previous_result: WorkUnitResult | None,
+    task_input_sha256: str,
+    reused_results_by_id: dict[str, WorkUnitResult],
+) -> WorkUnitResult | None:
+    # A rerun prerequisite invalidates its dependents even if it recreates the same bytes.
+    dependency_sha256 = _dependency_output_sha256(current_work_unit, reused_results_by_id)
+    if (
+        previous_result is None
+        or dependency_sha256 is None
+        or previous_result.task_input_sha256 != task_input_sha256
+        or previous_result.dependency_output_sha256 != dependency_sha256
+        or previous_result.artifact_kind != "final"
+        or not previous_result.proof_ready
+        or not _can_reuse_previous_work(
+            previous_work_unit=previous_work_unit,
+            current_work_unit=current_work_unit,
+        )
+        or not _completed_result_artifacts_are_current(previous_result)
+    ):
+        return None
+    return previous_result
 
 
 def _inspect_host_context(
@@ -1159,42 +1231,27 @@ def run_local_kernel(
             if result.status == "completed":
                 previous_results_by_artifacts[result.artifacts] = result
 
+    task_input_sha256 = _task_input_sha256(task_card)
+    planned_reused_results: dict[str, WorkUnitResult] = {}
     reused_work_unit_ids: list[str] = []
     planned_work_units: list[WorkUnit] = []
     for work_unit in plan.work_units:
-        reused_result = previous_results_by_artifacts.get(work_unit.expected_artifacts)
-        previous_work_unit = previous_work_units_by_artifacts.get(work_unit.expected_artifacts)
-        if (
-            reused_result is None
-            or not _can_reuse_previous_work(
-                previous_work_unit=previous_work_unit,
-                current_work_unit=work_unit,
-            )
-            or not _completed_result_artifacts_are_current(reused_result)
-        ):
+        reused_result = _reusable_completed_result(
+            previous_work_unit=previous_work_units_by_artifacts.get(work_unit.expected_artifacts),
+            current_work_unit=work_unit,
+            previous_result=previous_results_by_artifacts.get(work_unit.expected_artifacts),
+            task_input_sha256=task_input_sha256,
+            reused_results_by_id=planned_reused_results,
+        )
+        if reused_result is None:
             planned_work_units.append(work_unit)
             continue
-        planned_work_units.append(
-            WorkUnit(
-                id=work_unit.id,
-                goal=work_unit.goal,
-                depends_on=work_unit.depends_on,
-                preferred_skill=work_unit.preferred_skill,
-                binding_profile=work_unit.binding_profile,
-                binding_reason=work_unit.binding_reason,
-                fallback_skills=work_unit.fallback_skills,
-                expected_artifacts=work_unit.expected_artifacts,
-                verification=work_unit.verification,
-                task_verification=work_unit.task_verification,
-                plan_hints=work_unit.plan_hints,
-                verify_hints=work_unit.verify_hints,
-                acceptance_criteria=work_unit.acceptance_criteria,
-                selected_skill_provenance=work_unit.selected_skill_provenance,
-                status=work_unit.status,
-                lifecycle_state="reused",
-                reused_from_work_unit_id=reused_result.work_unit_id,
-            )
-        )
+        planned_reused_results[work_unit.id] = reused_result
+        planned_work_units.append(replace(
+            work_unit,
+            lifecycle_state="reused",
+            reused_from_work_unit_id=reused_result.work_unit_id,
+        ))
         reused_work_unit_ids.append(work_unit.id)
     current_artifacts = {work_unit.expected_artifacts for work_unit in plan.work_units}
     superseded_work_units = tuple(
@@ -1244,66 +1301,99 @@ def run_local_kernel(
     module_assignments_path = _write_json(run_root / "module-assignments.json", module_assignments_payload)
 
     work_results: list[WorkUnitResult] = []
+    results_by_id: dict[str, WorkUnitResult] = {}
+    reused_results_by_id: dict[str, WorkUnitResult] = {}
     completed_work_units: list[str] = []
     failed_work_units: list[str] = []
     should_execute = bool(execute and agent_skill_organization is not None)
+    if should_execute:
+        reused_work_unit_ids = []
     for work_unit in (plan.work_units if should_execute else ()):
-        reused_result = previous_results_by_artifacts.get(work_unit.expected_artifacts)
-        previous_work_unit = previous_work_units_by_artifacts.get(work_unit.expected_artifacts)
-        if (
-            reused_result is not None
-            and _can_reuse_previous_work(
-                previous_work_unit=previous_work_unit,
-                current_work_unit=work_unit,
+        reused_result = _reusable_completed_result(
+            previous_work_unit=previous_work_units_by_artifacts.get(work_unit.expected_artifacts),
+            current_work_unit=work_unit,
+            previous_result=previous_results_by_artifacts.get(work_unit.expected_artifacts),
+            task_input_sha256=task_input_sha256,
+            reused_results_by_id=reused_results_by_id,
+        )
+        if reused_result is not None:
+            result = replace(
+                reused_result,
+                work_unit_id=work_unit.id,
+                lifecycle_state="reused",
+                notes=(*reused_result.notes, "reused from previous completed work"),
+                proof=(*reused_result.proof, f"{work_unit.id}: reused from {reused_result.work_unit_id}"),
+                reused_from_work_unit_id=reused_result.work_unit_id,
             )
-            and _completed_result_artifacts_are_current(reused_result)
-        ):
-            work_results.append(
-                WorkUnitResult(
+            reused_results_by_id[work_unit.id] = result
+            reused_work_unit_ids.append(work_unit.id)
+        else:
+            write_run_state(
+                run_root / "run-state.json",
+                run_id=resolved_run_id,
+                task_id=task_card.id,
+                state="execute",
+                continuation_mode=continuation_mode,
+                accepted_revision_count=len(task_card.accepted_revisions),
+                active_work_unit=work_unit.id,
+                completed_work_units=tuple(completed_work_units),
+                failed_work_units=tuple(failed_work_units),
+                reused_work_units=tuple(reused_work_unit_ids),
+                superseded_work_units=tuple(unit.id for unit in superseded_work_units),
+            )
+            dependency_sha256 = _dependency_output_sha256(work_unit, results_by_id)
+            if dependency_sha256 is None:
+                reason = "Required dependency has no current completed output: " + ", ".join(work_unit.depends_on)
+                result = WorkUnitResult(
                     work_unit_id=work_unit.id,
-                    status=reused_result.status,
-                    lifecycle_state="reused",
-                    used_skill=reused_result.used_skill,
-                    artifacts=reused_result.artifacts,
-                    artifact_paths=reused_result.artifact_paths,
-                    proof_artifact_paths=reused_result.proof_artifact_paths,
-                    checked_targets=reused_result.checked_targets,
-                    notes=(*reused_result.notes, "reused from previous completed work"),
-                    proof=(*reused_result.proof, f"{work_unit.id}: reused from {reused_result.work_unit_id}"),
-                    execution_receipt_path=reused_result.execution_receipt_path,
-                    reused_from_work_unit_id=reused_result.work_unit_id,
-                    failure_reason=reused_result.failure_reason,
-                    artifact_sha256=reused_result.artifact_sha256,
+                    status="blocked",
+                    lifecycle_state="blocked",
+                    used_skill=None,
+                    artifacts=work_unit.expected_artifacts,
+                    artifact_paths=(),
+                    proof_artifact_paths=(),
+                    checked_targets=(),
+                    notes=(reason,),
+                    proof=(),
+                    execution_receipt_path=None,
+                    failure_reason=reason,
                 )
-            )
-            completed_work_units.append(work_unit.id)
-            continue
-        write_run_state(
-            run_root / "run-state.json",
-            run_id=resolved_run_id,
-            task_id=task_card.id,
-            state="execute",
-            continuation_mode=continuation_mode,
-            accepted_revision_count=len(task_card.accepted_revisions),
-            active_work_unit=work_unit.id,
-            completed_work_units=tuple(completed_work_units),
-            failed_work_units=tuple(failed_work_units),
-            reused_work_units=tuple(reused_work_unit_ids),
-            superseded_work_units=tuple(work_unit.id for work_unit in superseded_work_units),
-        )
-        result = capture_completed_artifact_sha256(
-            execute_work_unit(
-                resolved_agent_root,
-                task_card,
-                work_unit,
-                work_root=run_root / "work-units" / work_unit.id,
-            )
-        )
+            else:
+                result = capture_completed_artifact_sha256(
+                    execute_work_unit(
+                        resolved_agent_root,
+                        task_card,
+                        work_unit,
+                        work_root=run_root / "work-units" / work_unit.id,
+                    )
+                )
+                if result.status == "completed":
+                    result = replace(
+                        result,
+                        task_input_sha256=task_input_sha256,
+                        dependency_output_sha256=dependency_sha256,
+                    )
         work_results.append(result)
+        results_by_id[work_unit.id] = result
         if result.status == "completed":
             completed_work_units.append(work_unit.id)
         else:
             failed_work_units.append(work_unit.id)
+    if should_execute:
+        # Persist actual reuse after execution-time artifact checks.
+        plan = replace(plan, work_units=tuple(
+            replace(
+                unit,
+                lifecycle_state="reused" if unit.id in reused_results_by_id else "active",
+                reused_from_work_unit_id=(
+                    reused_results_by_id[unit.id].reused_from_work_unit_id
+                    if unit.id in reused_results_by_id else None
+                ),
+            )
+            for unit in plan.work_units
+        ))
+        work_plan_payload = plan.model_dump()
+        _write_json(plan_path, work_plan_payload)
     work_results_payload = {"work_results": [result.model_dump() for result in work_results]}
     _write_json(work_results_path, work_results_payload)
 

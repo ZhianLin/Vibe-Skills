@@ -7,7 +7,6 @@ CURRENT_ARCHITECTURE_ROOTS = [
     "adapters",
     "scripts",
     "protocols",
-    "docs/architecture",
 ]
 RETIRED_ARCHITECTURE_ROOTS = [
     "platform",
@@ -23,7 +22,8 @@ REMOVED_CODEX_VIBE_WRAPPER_SKILLS = [
 
 def test_clean_architecture_roots_exist() -> None:
     for rel in CURRENT_ARCHITECTURE_ROOTS:
-        assert (ROOT / rel).exists(), rel
+        assert (ROOT / rel).is_dir(), rel
+    assert (ROOT / "docs/architecture.md").is_file()
 
 
 def test_retired_top_level_roots_do_not_reappear() -> None:

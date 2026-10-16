@@ -702,7 +702,7 @@ def test_run_local_kernel_rejects_a_symlinked_legacy_run_root(
     assert not (external_root / "task-card.json").exists()
 
 
-def test_run_local_kernel_rejects_symlinked_files_inside_a_legacy_run(
+def test_run_local_kernel_ignores_linked_files_in_an_unregistered_legacy_run(
     tmp_path: Path,
 ) -> None:
     agent_root = tmp_path / "agent-root"
@@ -712,16 +712,19 @@ def test_run_local_kernel_rejects_symlinked_files_inside_a_legacy_run(
     external_file.write_text("external", encoding="utf-8")
     _create_symlink_or_skip(legacy_run_root / "linked.txt", external_file)
 
-    with pytest.raises(ValueError, match="run artifact trees must not contain symlinks"):
-        run_local_kernel(
-            agent_root=agent_root,
-            prompt="Do not copy linked legacy files.",
-            run_id="linked-file-run",
-            execute=False,
-        )
+    result = run_local_kernel(
+        agent_root=agent_root,
+        prompt="Do not copy linked legacy files.",
+        run_id="linked-file-run",
+        execute=False,
+    )
 
     canonical_root = agent_root / ".vibeskills" / "runs" / "linked-file-run"
+    assert result["work_summary"]["continuation_mode"] == "fresh"
+    assert result["legacy_run_root"] is None
     assert not (canonical_root / "linked.txt").exists()
+    assert (legacy_run_root / "linked.txt").is_symlink()
+    assert external_file.read_text(encoding="utf-8") == "external"
 
 
 def test_copy_run_tree_rechecks_destination_components_after_directory_creation(
@@ -934,7 +937,17 @@ def test_verify_run_rejects_artifact_content_changed_after_completion(tmp_path: 
     assert f"{work_unit.id}: artifact content changed after completion" in verification.notes
 
 
-def test_run_local_kernel_writes_skill_aware_artifact_content(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("deliverable", "required_headings"),
+    [
+        ("review notes", ("## Findings", "## Recommendation")),
+        ("implementation plan", ("## Work Steps", "## Exit Criteria")),
+        ("focused tests", ("## Test Targets", "## Assertions")),
+    ],
+)
+def test_run_local_kernel_writes_skill_aware_artifact_content(
+    tmp_path: Path, deliverable: str, required_headings: tuple[str, ...],
+) -> None:
     agent_root = tmp_path / "agent-root"
     vibe_root = agent_root / "vibe"
     local_skills = {
@@ -980,20 +993,15 @@ enabled: true
     run_local_kernel_with_agent_choice(
         agent_root=agent_root,
         prompt="Review the runtime redesign and produce an implementation plan and add focused tests.",
+        context={"deliverables": [deliverable]},
         run_id="skill-aware-run",
     )
 
     run_root = (agent_root / ".vibeskills" / "runs" / "skill-aware-run").resolve()
-    review_text = (run_root / "work-units" / "wu-1" / "artifacts" / "01-review-notes.md").read_text(encoding="utf-8")
-    plan_text = (run_root / "work-units" / "wu-2" / "artifacts" / "01-implementation-plan.md").read_text(encoding="utf-8")
-    test_text = (run_root / "work-units" / "wu-3" / "artifacts" / "01-focused-tests.md").read_text(encoding="utf-8")
-
-    assert "## Findings" in review_text
-    assert "## Recommendation" in review_text
-    assert "## Work Steps" in plan_text
-    assert "## Exit Criteria" in plan_text
-    assert "## Test Targets" in test_text
-    assert "## Assertions" in test_text
+    artifact_name = "01-" + deliverable.replace(" ", "-") + ".md"
+    artifact_text = (run_root / "work-units" / "wu-1" / "artifacts" / artifact_name).read_text(encoding="utf-8")
+    for heading in required_headings:
+        assert heading in artifact_text
 
 
 def test_run_local_kernel_writes_report_artifact_content(tmp_path: Path) -> None:
